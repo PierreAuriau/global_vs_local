@@ -6,7 +6,6 @@
 import logging
 import numpy as np
 from scipy.ndimage import rotate, gaussian_filter, shift
-from skimage import transform as sk_tf
 import torch
 import torch.nn as nn
 import numbers
@@ -15,11 +14,13 @@ logger = logging.getLogger()
 
 class ToTensor(nn.Module):
     def forward(self, arr):
+        arr = np.expand_dims(arr, axis=0)
         return torch.from_numpy(arr)
 
 
 class ToArray(nn.Module):
     def forward(self, tensor):
+        tensor = tensor.squeeze()
         return np.asarray(tensor)
 
 def interval(obj, lower=None):
@@ -167,7 +168,7 @@ class Cutout(object):
             size = [int(patch_size*s) for s in image_shape]
         else:
             size = patch_size
-        assert len(size) == len(image_shape), "Incorrect patch dimension."
+        assert len(size) == len(image_shape), f"Incorrect patch dimension. {len(size)}/{len(image_shape)}"
         for ndim in range(len(image_shape)):
             if size[ndim] > image_shape[ndim] or size[ndim] < 0:
                 size[ndim] = image_shape[ndim]
@@ -176,78 +177,7 @@ class Cutout(object):
     def __str__(self):
         return f"Cutout(patch_size={self.patch_size}, random_size={self.random_size}, " \
                f"localization={self.localization})"
-    
 
-class Crop(object):
-    """Crop the given n-dimensional array either at a random location or centered"""
-    def __init__(self, shape, localization="center", resize=False, keep_dim=False, random_size=False, image_shape=None):
-        """:param
-        shape: int, float, tuple or list of int
-            The shape of the patch to crop
-        localization: 'center' or 'random'
-            Whether the crop will be centered or at a random location
-        resize: bool, default False
-            If True, resize the cropped patch to the inital dim. If False, depends on keep_dim
-        keep_dim: bool, default False
-            if True and resize==False, put a constant value around the patch cropped. If resize==True, does nothing
-        """
-        assert localization in ["center", "random"], f"Unkwnown localization {localization}"
-        self.shape = shape
-        self.localization = localization
-        self.random_size = random_size
-        self.resize=resize
-        self.keep_dim=keep_dim
-        if image_shape is not None:
-            self.image_shape = image_shape
-            self.crop_size = self._set_crop_size(shape=shape, image_shape=image_shape)
-        else:
-            self.image_shape = None
-
-    def __call__(self, arr):
-        if self.image_shape is None:
-            self.image_shape = arr.shape
-            self.crop_size = self._get_crop_size(shape=self.shape, image_shape=self.image_shape)
-        indexes = []
-        for ndim, img_shape in enumerate(self.image_shape):
-            if self.random_size:
-                size = np.random.randint(self.crop_size[ndim], img_shape)
-            else:
-                size = self.crop_size[ndim]
-            if self.localization == "center":
-                delta_before = (img_shape - size) / 2.0
-            elif self.localization == "random":
-                delta_before = np.random.randint(0, img_shape - size + 1)
-            indexes.append(slice(int(delta_before), int(delta_before + size)))
-        if self.resize:
-            # resize the image to the input shape
-            return sk_tf.resize(arr[tuple(indexes)], self.image_shape, preserve_range=True)
-
-        if self.keep_dim:
-            mask = np.zeros(self.image_shape, dtype=np.bool)
-            mask[tuple(indexes)] = True
-            arr_copy = arr.copy()
-            arr_copy[~mask] = 0
-            return arr_copy
-
-        return arr[tuple(indexes)]
-    
-    @staticmethod
-    def _get_crop_size(shape, image_shape):
-        if isinstance(shape, int):
-            size = [shape for _ in range(len(image_shape))]
-        elif isinstance(shape, float):
-            size = [int(shape*s) for s in image_shape]
-        else:
-            size = shape
-        assert len(size) == len(image_shape), f"Shape of array {image_shape} does not match {shape}"
-        for ndim in range(len(image_shape)):
-            if size[ndim] > image_shape[ndim] or size[ndim] < 0:
-                size[ndim] = image_shape[ndim]
-        return size
-
-    def __str__(self):
-        return f"Crop(shape={self.shape}, random_size={self.random_size}, " \
-               f"localization={self.localization})"
     
 class Flip(object):
     """ Apply a random mirror flip."""
@@ -297,61 +227,6 @@ class Blur(object):
     
     def __str__(self):
         return f"Blur(snr={self.snr}, sigma={self.sigma})"
-
-
-class Noise(object):
-    def __init__(self, snr=None, sigma=None, noise_type="gaussian"):
-        """ Add random Gaussian or Rician noise.
-
-           The noise level can be specified directly by setting the standard
-           deviation or the desired signal-to-noise ratio for the Gaussian
-           distribution. In the case of Rician noise sigma is the standard deviation
-           of the two Gaussian distributions forming the real and imaginary
-           components of the Rician noise distribution.
-
-           In anatomical scans, CNR values for GW/WM ranged from 5 to 20 (1.5T and
-           3T) for SNR around 40-100 (http://www.pallier.org/pdfs/snr-in-mri.pdf).
-
-           Parameters
-           ----------
-           snr: float, default None
-               the desired signal-to noise ratio used to infer the standard deviation
-               for the noise distribution.
-           sigma: float or 2-uplet, default None
-               the standard deviation for the noise distribution.
-           noise_type: str, default 'gaussian'
-               the distribution of added noise - can be either 'gaussian' for
-               Gaussian distributed noise, or 'rician' for Rice-distributed noise.
-        """
-
-        if snr is None and sigma is None:
-            raise ValueError("You must define either the desired signal-to noise "
-                             "ratio or the standard deviation for the noise "
-                             "distribution.")
-        assert noise_type in {"gaussian", "rician"}, "Noise muse be either Rician or Gaussian"
-        self.snr = snr
-        self.sigma = sigma
-        self.noise_type = noise_type
-
-
-    def __call__(self, arr):
-        sigma = self.sigma
-        if self.snr is not None:
-            s0 = np.std(arr)
-            sigma = s0 / self.snr
-        sigma = interval(sigma, lower=0)
-        sigma_random = np.random.uniform(low=sigma[0], high=sigma[1], size=1)[0]
-        noise = np.random.normal(0, sigma_random, [2] + list(arr.shape))
-        if self.noise_type == "gaussian":
-            transformed = arr + noise[0]
-        elif self.noise_type == "rician":
-            transformed = np.square(arr + noise[0])
-            transformed += np.square(noise[1])
-            transformed = np.sqrt(transformed)
-        return transformed
-    
-    def __str__(self):
-        return f"Noise(snr={self.snr})"
     
 
 class Shift(object):
@@ -372,3 +247,17 @@ class Shift(object):
                 translation = self.nb_voxels
         transformed = shift(arr, translation, order=0, mode='constant', cval=0.0, prefilter=False)
         return transformed
+
+if __name__ == "__main__":
+    from config import Config
+    config = Config()
+    import os
+    arr = np.load(os.path.join(config.path2data, "skeleton_sub-1000606.npy"))
+    print(arr.shape)
+    cutout = Cutout(patch_size=0.4, random_size=True, localization="on_data", min_size=0.1)
+    
+    view_1 = cutout(arr)
+    view_2 = cutout(arr)
+    view_3 = cutout(arr)
+    print(np.all(view_1  == view_2))
+    print(np.all(view_2 == view_3))
