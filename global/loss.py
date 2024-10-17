@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 import numpy as np
 import torch
@@ -7,15 +8,14 @@ import torch.nn.functional as func
 
 
 class BarlowTwinsLoss(nn.Module):
-  """ Implementation from : 
+    """ Implementation from : 
         J. Zbontar, et al., Barlow Twins: Self-Supervised Learning via Redundancy Reduction, ICML 2021
         Available from : https://proceedings.mlr.press/v139/zbontar21a.html.
-  """
+    """
 
-    def __init__(self, device, correlation='cross', lambda_param=5e-3):
+    def __init__(self, correlation='cross', lambda_param=5e-3):
         super(BarlowTwinsLoss, self).__init__()
         self.lambda_param = lambda_param
-        self.device = device
         self.correlation = correlation
 
     def forward(self, z_a, z_b):
@@ -32,7 +32,7 @@ class BarlowTwinsLoss(nn.Module):
             # cross-correlation matrix
             c = torch.mm(z_a_norm.T, z_b_norm) / N # DxD
             # loss
-            c_diff = (c - torch.eye(D,device=self.device)).pow(2) # DxD
+            c_diff = (c - torch.eye(D, device=c.device)).pow(2) # DxD
             # multiply off-diagonal elems of c_diff by lambda
             c_diff[~torch.eye(D, dtype=bool)] *= self.lambda_param
             loss = c_diff.sum()
