@@ -39,7 +39,7 @@ class UKBDataset(Dataset):
         self.scheme = self.load_scheme()
 
         # 2) Selects the data to load in memory according to selected scheme
-        assert (self.scheme[self._unique_keys] == self.metadata[self._unique_keys]).all(), \
+        assert (self.scheme[self._unique_keys] == self.metadata[self._unique_keys]).all().all(), \
         f"Scheme and participant dataframes do not have same order"
         mask = (self.scheme["set"] == self.split)
         self.metadata = self.metadata[mask]
@@ -74,7 +74,7 @@ class UKBDataset(Dataset):
     
     def load_scheme(self):
         scheme_df = pd.read_csv(os.path.join(config.path2schemes, self._train_val_scheme), dtype=self._id_types)
-        return scheme_df[self._unique_keys]
+        return scheme_df
     
     def __getitem__(self, idx: int):
         sample = dict()
