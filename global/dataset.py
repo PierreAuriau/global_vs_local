@@ -211,13 +211,13 @@ class ClinicalDataset(Dataset):
     def __getitem__(self, idx: int):
         sample = dict()
         if self.target is not None:
-            sample[self.label] = self.target[idx]
+            sample["label"] = self.target[idx]
         (dataset_idx, sample_idx) = self._mapping_idx(idx)
         arr = self.images[dataset_idx][sample_idx]
         if self.transforms is not None:
-            sample["input"] = self.transforms(arr)
+            sample["input"] = self.transforms(arr.copy())
         else:
-            sample["input"] = arr
+            sample["input"] = arr.copy()
         return sample
     
     def __len__(self):
