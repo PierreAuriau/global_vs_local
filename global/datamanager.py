@@ -12,13 +12,13 @@ from torchvision.transforms import transforms
 from torch.utils.data import DataLoader
 
 # project imports
-from dataset import UKBDataset
+from dataset import UKBDataset, ClinicalDataset
 from data_augmentation import Cutout, Shift, Blur, ToTensor
 
 
 class DataManager(object):
 
-    def __init__(self, label: str = None, two_views: bool = False,  
+    def __init__(self, dataset: str, label: str = None, two_views: bool = False,  
                  batch_size: int = 1, data_augmentation: str = None,
                  **dataloader_kwargs):
         
@@ -52,12 +52,36 @@ class DataManager(object):
         else:
             tr = ToTensor()
 
+        if label == "sex":
+            target_mapping = {"H": 0, "F": 1}
+        elif label == "diagnosis":
+            target_mapping = {"control": 0, 
+                              "asd": 1,
+                              "bd": 1, "bipolar disorder": 1, "psychotic bd": 1, 
+                              "scz": 1}
+        else:
+            target_mapping = None
+        
         self.dataset = dict()
-        self.dataset["train"] = UKBDataset(split='train', label=label, 
-                                           transforms=tr, two_views=two_views)
-        self.dataset["validation"] = UKBDataset(split='validation', label=label, 
-                                                transforms=tr, two_views=two_views)
-    
+        if dataset == "ukb":
+            self.dataset["train"] = UKBDataset(split='train', label=label, 
+                                            transforms=tr, two_views=two_views)
+            self.dataset["validation"] = UKBDataset(split='validation', label=label, 
+                                                    transforms=tr, two_views=two_views)
+        elif dataset in ("asd", "bd", "scz"):
+            self.dataset["train"] = ClinicalDataset(split="train", label=label,
+                                                    dataset=dataset, transforms=tr,
+                                                    target_mapping=target_mapping)
+            self.dataset["validation"] = ClinicalDataset(split="validation", label=label,
+                                                         dataset=dataset, transforms=tr,
+                                                         target_mapping=target_mapping)
+            self.dataset["test_intra"] = ClinicalDataset(split="test_intra", label=label,
+                                                         dataset=dataset, transforms=tr,
+                                                         target_mapping=target_mapping)
+            self.dataset["test"] = ClinicalDataset(split="test", label=label,
+                                                        dataset=dataset, transforms=tr,
+                                                        target_mapping=target_mapping)
+
     def get_dataloader(self, split):
         dataset = self.dataset[split]
         drop_last = True if len(dataset) % self.batch_size == 1 else False
@@ -76,13 +100,23 @@ class DataManager(object):
         return "DataManager"
     
 if __name__ == "__main__":
-    datamanager = DataManager(label=None, two_views=False, batch_size=32, data_augmentation=None)
+    datamanager = DataManager(dataset="ukb", label=None, two_views=False, 
+                              batch_size=32, data_augmentation=None)
     train_loader = datamanager.get_dataloader(split="train")
     val_loader = datamanager.get_dataloader(split="validation")
     for sample in val_loader:
         break
     assert len(train_loader) == 592
-    assert (sample["input"].size() == torch.Tensor(32, 1, 128, 160, 128))
+    assert sample["input"].size() == torch.Size((32, 1, 128, 160, 128)), \
+          f"Wrong sample size: {sample['input'].size()}"
+    """
     from data_augmentation import ToArray
     np.save("/neurospin/dico/pauriau/tmp/view_1.npy", ToArray()(sample["view_1"]))
     np.save("/neurospin/dico/pauriau/tmp/view_2.npy", ToArray()(sample["view_2"]))
+    """
+
+    datamanager = DataManager(dataset="scz", label="diagnosis", 
+                              two_views=False, batch_size=32, data_augmentation=None)
+    for split in ("train", "validation", "test_intra", "test"):
+        loader = datamanager.get_dataloader(split=split)
+        print(len(loader))
