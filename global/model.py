@@ -207,7 +207,7 @@ class BTModel(nn.Module):
             for batch in tqdm(val_loader, desc="Validation"):
                 input = batch["input"].to(self.device)
                 label = batch["label"].to(self.device)
-                loss = self.test_classifier_step(input, label)
+                loss = self.valid_classifier_step(input, label)
                 val_loss += loss
             self.logger.reduce(reduce_fx="sum")
             self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss})
@@ -229,8 +229,8 @@ class BTModel(nn.Module):
         with autocast(device_type=self.device.type, dtype=torch.float16):
             with torch.no_grad():
                 z = self.encoder(input)
-            y_pred = self.classifier(z, return_logits=True)
-            loss = self.loss_fn(y_pred.squeeze(), label)
+            pred = self.classifier(z, return_logits=True)
+            loss = self.loss_fn(pred.squeeze(), label)
         self.scaler.scale(loss).backward()
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -238,13 +238,47 @@ class BTModel(nn.Module):
             self.lr_scheduler.step()
         return loss.item()
 
-    def test_classifier_step(self, input, label):
+    def valid_classifier_step(self, input, label):
         with torch.no_grad():
             z = self.encoder(input)
-            y_pred = self.classifier(z)
-            loss = self.loss_fn(y_pred.squeeze(), label)
+            pred = self.classifier(z, return_logits=True)
+            loss = self.loss_fn(pred.squeeze(), label)
         return loss.item()
-
+    
+    def test_classifier(self, loaders, splits,
+                        chkpt_dir, epoch):
+        self.logger.reset_history()
+        self.load_chkpt(chkpt_dir=chkpt_dir,
+                        filename=f"classifier_ep-{epoch}.pth")
+        self.eval()
+        for split, loader in zip(splits, loaders):
+            self.logger.step()
+            logs = self.test_classifier_step(loader=loader,
+                                             split=split)
+            self.logger.store({"epoch": epoch,
+                               **logs})
+        self.logger.save(chkpt_dir, filename="_test")
+    
+    def test_classifier_step(self, loader, split):
+        y_true = []
+        y_pred = []
+        for batch in tqdm(loader, desc=split):
+            input = batch["input"].to(self.device)
+            with torch.no_grad():
+                z = self.encoder(input)
+                pred = self.classifier(z)
+            y_pred.extend(pred.cpu().numpy())
+            y_true.extend(batch["label"].numpy())
+        y_pred = np.asarray(y_pred)
+        y_true = np.asarray(y_true)
+        logs = {
+            "split": split,
+            "roc_auc": roc_auc_score(y_true=y_true, y_score=y_pred),
+            "balanced_accuracy": balanced_accuracy_score(y_true=y_true, 
+                                        y_pred=(y_pred > 0.5).astype(int))
+               }
+        return logs
+        
     def save_hyperparameters(self, chkpt_dir, hp={}):
         hp = {"n_embedding": self.n_embedding, **hp}
         with open(os.path.join(chkpt_dir, "hyperparameters.json"), "w") as f:
@@ -270,7 +304,7 @@ class BTModel(nn.Module):
             status = self.projector.load_state_dict(chkpt["projector"], strict=False)
             self.logger.info(f"Loading projector : {status}")
         if ("classifier" in chkpt.keys()) & (self.classifier is not None):
-            status = self.projector.load_state_dict(chkpt["classifier"], strict=False)
+            status = self.classifier.load_state_dict(chkpt["classifier"], strict=False)
             self.logger.info(f"Loading classifier : {status}")
         if load_optimizer:
             self.optimizer.load_state_dict(torch.load(os.path.join(chkpt_dir, "optimizer.pth"),
