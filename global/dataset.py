@@ -35,7 +35,7 @@ class UKBDataset(Dataset):
         self.two_views = two_views
                 
         # 1) Loads globally all the data
-        self.metadata = pd.read_csv(os.path.join(config.path2data, "ukbiobank_t1mri_skeleton_participants.csv"), dtype=self._id_types)
+        self.metadata = pd.read_csv(os.path.join(config.home_local, "ukbiobank_t1mri_skeleton_participants.csv"), dtype=self._id_types)
         self.scheme = self.load_scheme()
 
         # 2) Selects the data to load in memory according to selected scheme
@@ -52,7 +52,11 @@ class UKBDataset(Dataset):
             self.target = self.metadata[self.label]
             if target_mapping is not None:
                 self.target = self.target.replace(target_mapping)
-            assert self.target.isna().sum().sum() == 0, f"Missing values in {self.label} column"
+            if self.target.isnull().any():
+                logger.warning(f"Missing values in {self.label} column")
+                logger.warning(f"Removing {self.target.isnull().sum()} subjects")
+                self.metadata = self.metadata[self.target.notnull()]
+                self.target = self.target[self.target.notnull()]
             self.target = self.target.values.astype(np.float32)
         else:
             self.target = None
@@ -79,7 +83,7 @@ class UKBDataset(Dataset):
     def __getitem__(self, idx: int):
         sample = dict()
         if self.target is not None:
-            sample[self.label] = self.target[idx]
+            sample["label"] = self.target[idx]
 
         arr_path = self.metadata["arr_path"].iloc[idx]
         arr = np.load(arr_path)
