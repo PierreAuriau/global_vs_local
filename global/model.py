@@ -49,10 +49,12 @@ class BTModel(nn.Module):
             self.logger = logging.getLogger("classifier")
         else:
             self.classifier = None
-        if self.logger is None:
-            self.logger = logging.getLogger("encoder")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.logger.info(f"Device used : {self.device}")
+        try:
+            self.logger.info(f"Device used : {self.device}")
+        except AttributeError:
+            self.logger = logging.getLogger("encoder")
+            self.logger.info(f"Device used : {self.device}")
         self = self.to(self.device)
 
     def forward(self, x):
@@ -141,36 +143,46 @@ class BTModel(nn.Module):
             loss = self.loss_fn(zp_1, zp_2)
         return loss.item()
     
-    def get_embeddings(self, loader, label=None):
+    def get_embeddings(self, loader, label=False):
         embeddings = []
         labels = []
-        for batch in loader:
-            x = batch["input"].to(self.device) 
-            z = self.encoder(x)
+        for batch in tqdm(loader, desc="embeddings"):
+            with torch.no_grad():
+                x = batch["input"].to(self.device) 
+                z = self.encoder(x)
             embeddings.extend(z.cpu().numpy())
-            if label is not None:
-                labels.extend(batch[label].numpy())
-        if label is not None:
+            if label:
+                labels.extend(batch["label"].numpy())
+        if label:
             return np.asarray(embeddings), np.asarray(labels)
         return np.asarray(embeddings)
     
-    def test_linear_probe(self, train_loader, test_loader, epochs, label, chkpt_dir, save_y_pred=False):
+    def test_linear_probe(self, train_loader, val_loader, epochs, label, chkpt_dir, save_y_pred=False):
         self.logger.reset_history()
         for epoch in epochs:
             self.load_chkpt(chkpt_dir=chkpt_dir,
                             filename=f'barlowtwins_ep-{epoch}.pth')
             self.eval()
-            z_train, y_train = self.get_embeddings(loader=train_loader, label=label)
-            z_test, y_test = self.get_embeddings(loader=test_loader, label=label)
-            clf = LogisticRegression(max_iter=1000)
+            z_train, y_train = self.get_embeddings(loader=train_loader, label=True)
+            z_val, y_val = self.get_embeddings(loader=val_loader, label=True)
+            clf = LogisticRegression(max_iter=10000)
             clf.fit(z_train, y_train)
-            y_pred = clf.predict_proba(z_test)
-            self.logger.store({"epoch": epoch,
-                               "label": label,
-                               "roc_auc": roc_auc_score(y_score=y_pred[:, 1], y_true=y_test),
-                               "balanced_accuracy": balanced_accuracy_score(y_pred=y_pred.argmax(axis=1), y_true=y_test)})
+            for split in ("train", "validation"):
+                self.logger.step()
+                if split == "train":
+                    y_pred = clf.predict_proba(z_train)
+                    y_true = y_train
+                elif split == "validation":
+                    y_pred = clf.predict_proba(z_val)
+                    y_true = y_val
+                self.logger.store({
+                                "epoch": epoch,
+                                "label": label,
+                                "set": split,
+                                "roc_auc": roc_auc_score(y_score=y_pred[:, 1], y_true=y_true),
+                                "balanced_accuracy": balanced_accuracy_score(y_pred=y_pred.argmax(axis=1), y_true=y_true)})
             if save_y_pred:
-                np.save(os.path.join(chkpt_dir, f"y_pred_label-{label}_epoch-{epoch}.npy"), y_pred)
+                np.save(os.path.join(chkpt_dir, f"y_pred_label-{label}_epoch-{epoch}_set-{split}.npy"), y_pred)
         self.logger.save(chkpt_dir, filename="_test")
 
     def fine_tuning(self, train_loader, val_loader,
