@@ -155,10 +155,13 @@ class DLModel(nn.Module):
         return logs
     
     def test_linear_probe(self, predictions, labels, epoch,
-                          label, chkpt_dir, save_y_pred=False):
-        # FIXME
+                          chkpt_dir, logs={}, save_y_pred=False):
+        
+        # FIXME : add loadings ?
+        # FIXME : return y_true in test ?
         self.logger.reset_history()
-        clf = LogisticRegression(max_iter=10000)
+        clf = LogisticRegression(max_iter=10000, C=1.0, penalty="l2", 
+                                 fit_intercept=True)
         clf.fit(predictions["train"], labels["train"])
         for split in ("train", "validation", "test", "test_intra"):
             self.logger.step()
@@ -167,12 +170,14 @@ class DLModel(nn.Module):
 
             self.logger.store({
                             "epoch": epoch,
-                            "label": label,
                             "set": split,
                             "roc_auc": roc_auc_score(y_score=y_pred[:, 1], y_true=y_true),
-                            "balanced_accuracy": balanced_accuracy_score(y_pred=y_pred.argmax(axis=1), y_true=y_true)})
+                            "balanced_accuracy": balanced_accuracy_score(y_pred=y_pred.argmax(axis=1), y_true=y_true),
+                            **logs})
         if save_y_pred:
             np.save(os.path.join(chkpt_dir, f"y_pred_epoch-{epoch}_set-{split}.npy"), y_pred)
+            np.save(os.path.join(chkpt_dir, f"y_true_epoch-{epoch}_set-{split}.npy"), y_true)
+            np.save(os.path.join(chkpt_dir, f"coef_epoch-{epoch}_set-{split}.npy"), clf.coef_)
         self.logger.save(chkpt_dir, filename="_test")
         
     def save_hyperparameters(self, chkpt_dir, hp={}):
