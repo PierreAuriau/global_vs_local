@@ -64,18 +64,14 @@ class DataManager(object):
                                                     dataset=dataset, transforms=tr,
                                                     target_mapping=target_mapping)
 
-    def get_dataloader(self, split):
+    def get_dataloader(self, split, **kwargs):
         dataset = self.dataset[split]
         drop_last = True if len(dataset) % self.batch_size == 1 else False
         if drop_last:
             self.logger.warning(f"The last subject of the {split} set will not be feed into the model ! "
                                 f"Change the batch size ({self.batch_size}) to keep all subjects ({len(dataset)})")
-        if split == "train":
-            shuffle = True
-        else:
-            shuffle = False
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=shuffle,
-                            drop_last=drop_last, **self.dataloader_kwargs)
+        loader = DataLoader(dataset, batch_size=self.batch_size,
+                            drop_last=drop_last, **kwargs)
         return loader
         
     def __str__(self):
