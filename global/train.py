@@ -4,6 +4,8 @@
 import os
 import sys
 import argparse
+import json
+import re
 
 # from project
 from log import setup_logging
@@ -14,123 +16,130 @@ from config import Config
 config = Config()
 
 
-def train_bt_model(chkpt_dir, lambda_bt, correlation_bt):
+def fit_bt_model(chkpt_dir,
+                 n_embedding=256, nb_epochs=300, lr=1e-4,
+                 correlation_bt="cross", lambda_bt=1.0,
+                 data_augmentation="cutout", batch_size=32,
+                 num_workers=8):
     
-    model = BTModel(n_embedding=256, projector=True)
+    model = BTModel(n_embedding=n_embedding, projector=True)
     datamanager = DataManager(dataset="ukb", label=None, two_views=True,  
-                              batch_size=32, data_augmentation="cutout",
-                              num_workers=8, pin_memory=True)
+                              data_augmentation=data_augmentation)
     
-    train_loader = datamanager.get_dataloader(split="train")
-    val_loader = datamanager.get_dataloader(split="validation")
+    train_loader = datamanager.get_dataloader(split="train", shuffle=True,
+                                              batch_size=batch_size,
+                                              num_workers=num_workers)
+    val_loader = datamanager.get_dataloader(split="validation",
+                                            batch_size=batch_size,
+                                            num_workers=num_workers)
     
-    model.fit(train_loader=train_loader, val_loader=val_loader, 
-              nb_epochs=100,
-              correlation=correlation_bt, lambda_param=lambda_bt,
-              chkpt_dir=chkpt_dir)
+    model.fit(train_loader=train_loader, val_loader=None, 
+              nb_epochs=nb_epochs,
+              correlation_bt=correlation_bt, lambda_bt=lambda_bt,
+              chkpt_dir=chkpt_dir,
+              lr=lr)
     
-def test_bt_model(chkpt_dir):
-    model = BTModel(n_embedding=256, projector=False)
-    datamanager = DataManager(dataset="ukb", label="Sex", two_views=False,  
-                              batch_size=32, data_augmentation=None,
-                              num_workers=8)
+def fine_tune_bt_model(chkpt_dir, dataset,
+                       n_embedding=256, pretrained_epoch=299,
+                       nb_epochs=100, lr=1e-4, weight_decay=5e-3,
+                       batch_size=32, num_workers=8):
     
-    train_loader = datamanager.get_dataloader(split="train")
-    val_loader = datamanager.get_dataloader(split="validation")
+    model = BTModel(n_embedding=n_embedding, classifier=True)
     
-    model.test_linear_probe(train_loader=train_loader, val_loader=val_loader,
-                            label="sex",
-                            epochs=[i for i in range(0, 100, 10)] + [99], 
-                            chkpt_dir=chkpt_dir)
+    datamanager = DataManager(dataset=dataset, label="diagnosis", two_views=False,  
+                              data_augmentation=None)  
     
-def test_bt_model_dx(chkpt_dir):
+    train_loader = datamanager.get_dataloader(split="train", shuffle=True,
+                                            batch_size=batch_size,
+                                            num_workers=num_workers)
+    val_loader = datamanager.get_dataloader(split="validation",
+                                            batch_size=batch_size,
+                                            num_workers=num_workers)
+    
+    model.fine_tuning(train_loader, val_loader, pretrained_epoch=pretrained_epoch, 
+                        nb_epochs=nb_epochs, chkpt_dir=chkpt_dir, 
+                        lr=lr, weight_decay=weight_decay,
+                        logs={"dataset": dataset, "label": "diagnosis"})
+    
+    train_loader = datamanager.get_dataloader(split="train", shuffle=False,
+                                    batch_size=config.batch_size,
+                                    num_workers=config.num_workers)
+    test_intra_loader = datamanager.get_dataloader(split="test_intra",
+                                                    batch_size=batch_size,
+                                                    num_workers=num_workers)
+    test_loader = datamanager.get_dataloader(split="test",
+                                             batch_size=batch_size,
+                                             num_workers=num_workers)
+    
+    model.test_classifier(loaders=[train_loader, val_loader,
+                                    test_intra_loader, test_loader],
+                            splits=["train", "validation", "test_intra", "test"],
+                            epoch=(nb_epochs-1), chkpt_dir=chkpt_dir,
+                            logs={"dataset": dataset, "label": "diagnosis"})
 
-    model = BTModel(n_embedding=256, projector=False)
+def train(params):
 
+    fit_bt_model(chkpt_dir=params["chkpt_dir"],
+                 n_embedding=params.get("n_embedding", config.n_embedding),
+                 nb_epochs=params.get("nb_epochs", config.nb_epochs),
+                 lr=params.get("lr", config.lr),
+                 correlation_bt=params.get("correlation", config.correlation_bt),
+                 lambda_bt=params.get("lambda", config.lambda_bt),
+                 data_augmentation=params.get("data_augmentation", config.data_augmentation),
+                 batch_size=params.get("batch_size", config.batch_size),
+                 num_workers=params.get("num_workers", config.num_workers))
+
+def fine_tune(params):
+    chkpt_dir = params["chkpt_dir"]
+    with open(os.path.join(chkpt_dir, "hyperparameters.json"), "r") as json_file:
+        hyperparameters = json.load(json_file)
+    n_embedding = hyperparameters.get("n_embedding", config.n_embedding)
+    epoch_f = hyperparameters.get("nb_epochs", config.nb_epochs) - 1
+    
     for dataset in ("asd", "bd", "scz"):
-        datamanager = DataManager(dataset=dataset, label="diagnosis", two_views=False,  
-                                batch_size=32, data_augmentation=None,
-                                num_workers=8)
-        chkpt_dir_dt = os.path.join(chkpt_dir, dataset)
-        os.makedirs(chkpt_dir_dt, exist_ok=True)
-        list_epochs = [i for i in range(0, 100, 10)] + [99]
-        for epoch in list_epochs:
-            if not os.path.exists(os.path.join(chkpt_dir_dt, 
-                                               f"barlowtwins_ep-{epoch}.pth")):
-                os.symlink(os.path.join(chkpt_dir,
-                                    f"barlowtwins_ep-{epoch}.pth"),
-                        os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch}.pth"))
-        train_loader = datamanager.get_dataloader(split="train")
-        val_loader = datamanager.get_dataloader(split="validation")
-    
-        model.test_linear_probe(train_loader=train_loader, val_loader=val_loader,
-                                label="diagnosis",
-                                epochs=list_epochs, 
-                                chkpt_dir=chkpt_dir_dt)
-    
-def fine_tune_model(chkpt_dir):
-    
-    model = BTModel(n_embedding=256, classifier=True)
 
-    for dataset in ("asd", "bd"):
-        datamanager = DataManager(dataset="scz", label="diagnosis", two_views=False,  
-                                batch_size=32, data_augmentation=None,
-                                num_workers=8)
         chkpt_dir_dt = os.path.join(chkpt_dir, dataset)
         os.makedirs(chkpt_dir_dt, exist_ok=True)
-        if not os.path.exists(os.path.join(chkpt_dir_dt, "barlowtwins_ep-99.pth")):
-            os.symlink(os.path.join(config.path2models, "20241017_correct_lambda_param",
-                                    "barlowtwins_ep-99.pth"),
-                    os.path.join(chkpt_dir_dt, "barlowtwins_ep-99.pth"))  
-        train_loader = datamanager.get_dataloader(split="train")
-        val_loader = datamanager.get_dataloader(split="validation")
-        test_intra_loader = datamanager.get_dataloader(split="test_intra")
-        test_loader = datamanager.get_dataloader(split="test")
+        if not os.path.exists(os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth")):
+            os.symlink(os.path.join(chkpt_dir,
+                                    f"barlowtwins_ep-{epoch_f}.pth"),
+                    os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth"))
         
-        model.fine_tuning(train_loader, val_loader, pretrained_epoch=99, 
-                          nb_epochs=100, chkpt_dir=chkpt_dir_dt, 
-                          lr=1e-4, weight_decay=5e-5)
-        
-        model.test_classifier(loaders=[train_loader, val_loader,
-                                       test_intra_loader, test_loader],
-                             splits=["train", "validation", "test_intra", "test"],
-                             epoch=99, chkpt_dir=chkpt_dir_dt)
-    
-def test_classifier(chkpt_dir):
-    model = BTModel(n_embedding=256, classifier=True)
-    datamanager = DataManager(dataset="scz", label="diagnosis", two_views=False,  
-                              batch_size=32, data_augmentation=None,
-                              num_workers=8)
-    splits = ["train", "validation", "test_intra", "test"]
-    loaders = [datamanager.get_dataloader(split=s) for s in splits]
-    
-    model.test_classifier(loaders=loaders, splits=splits, 
-                          epoch=99, chkpt_dir=chkpt_dir)
-    
+        fine_tune_bt_model(chkpt_dir, dataset,
+                           n_embedding=n_embedding, 
+                           pretrained_epoch=epoch_f,
+                           nb_epochs=params.get("nb_epochs", config.nb_epochs_ft), 
+                           lr=params.get("lr", config.lr_ft), 
+                           weight_decay=params.get("weight_decay", config.weight_decay_ft),
+                           batch_size=params.get("batch_size", config.batch_size), 
+                           num_workers=params.get("num_workers", config.num_workers))
+
 def parse_args(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--chkpt_dir", required=True, type=str,
-    help="Checkpoint dir where all the logs are stored. List of existing checkpoint directories:" \
-        + "/".join(os.listdir(config.path2models)))
-    parser.add_argument("-e", "--exp", required=True, type=str,
-    help="Experience that you want to launch")
-    args = parser.parse_args(argv)
-    return args
+    help="Checkpoint dir where all the logs are stored. List of existing checkpoint directories: " \
+        + " - ".join(os.listdir(config.path2models)))
+    parser.add_argument("-t", "--train", action="store_true", help="Train the model")
+    parser.add_argument("-f", "--fine_tune", action="store_true", help="Finetune the model")
+    args, unknownargs = parser.parse_known_args(argv)
+    params = {}
+    for i in range(0, len(unknownargs), 2):
+        key = re.search("--([a-z_]+)", unknownargs[i])[1]
+        params[key] = eval(unknownargs[i+1])
+    return args, params
 
 
 if __name__ == "__main__":
 
-    args = parse_args(sys.argv[1:])
+    args, params = parse_args(sys.argv[1:])
     chkpt_dir = os.path.join(config.path2models, args.chkpt_dir)
+    params["chkpt_dir"] = chkpt_dir
     os.makedirs(chkpt_dir, exist_ok=True)
     setup_logging(level="info", 
                   logfile=os.path.join(chkpt_dir, "train_bt_model.log"))
-    if args.exp == "fine_tune_model":
-        fine_tune_model(chkpt_dir=chkpt_dir)
-    elif args.exp == "test_bt_model":
-        test_bt_model(chkpt_dir=chkpt_dir)
-    elif args.exp == "test_classifier":
-        test_classifier(chkpt_dir=chkpt_dir)
-    elif args.exp == "test_bt_model_dx":
-        test_bt_model_dx(chkpt_dir=chkpt_dir)
+    
+    if args.train:
+        train(params)
+    if args.fine_tune:
+        fine_tune(params)
     
