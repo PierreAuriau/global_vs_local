@@ -31,6 +31,28 @@ class Classifier(nn.Module):
             pred = self.activation(h)
             return pred.squeeze()
 
+
+class Projector(nn.Module):
+    """Projector from 
+    <https://github.com/facebookresearch/barlowtwins>
+    """
+    def __init__(self, latent_dim):
+        super(Projector, self).__init__()
+        self.latent_dim = latent_dim
+        self.fc = nn.Sequential(nn.Linear(self.latent_dim, 4*self.latent_dim, bias=False),
+                                nn.BatchNorm1d(4*self.latent_dim),
+                                nn.ReLU(),
+                                nn.Linear(4*self.latent_dim, 4*self.latent_dim, bias=False),
+                                nn.BatchNorm1d(4*self.latent_dim),
+                                nn.ReLU(),
+                                nn.Linear(4*self.latent_dim, 4*self.latent_dim, bias=False))
+
+    def forward(self, latent):
+        latent = latent.view(-1, self.latent_dim)
+        out = self.fc(latent)
+        return out
+
+
 if __name__ == "__main__":
     import torch
     t = torch.randn((32, 256))
