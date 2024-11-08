@@ -21,7 +21,7 @@ from sklearn.metrics import balanced_accuracy_score, mean_absolute_error, \
                             mean_squared_error, r2_score, roc_auc_score
 
 from densenet import densenet121
-from classifier import Classifier
+from mlp import Classifier, Projector
 from loss import BarlowTwinsLoss
 from log import TrainLogger
 
@@ -36,10 +36,7 @@ class BTModel(nn.Module):
         self.n_embedding = n_embedding
         self.encoder = densenet121(n_embedding=n_embedding, in_channels=1)
         if projector:
-            self.projector = nn.Sequential(nn.Linear(n_embedding, 2 * n_embedding),
-                                        nn.BatchNorm1d(2 * n_embedding),
-                                        nn.ReLU(),
-                                        nn.Linear(2 * n_embedding, n_embedding))
+            self.projector = Projector(latent_dim=n_embedding)
             self.logger = logging.getLogger("btmodel")
         else:
             self.projector = None
@@ -71,13 +68,15 @@ class BTModel(nn.Module):
         return optim.Adam(self.parameters(), **kwargs)
     
     def fit(self, train_loader, val_loader, nb_epochs, 
-            correlation_bt, lambda_bt,
-            chkpt_dir, **kwargs_optimizer):
+            correlation_bt, lambda_bt, chkpt_dir,
+            logs={}, **kwargs_optimizer):
         
         self.optimizer = self.configure_optimizers(**kwargs_optimizer)
         self.lr_scheduler = None
         self.save_hyperparameters(chkpt_dir, {"lambda_bt": lambda_bt, 
-                                              "correlation_bt": correlation_bt})
+                                              "correlation_bt": correlation_bt,
+                                              "nb_epochs": nb_epochs,
+                                              **kwargs_optimizer})
         self.logger.reset_history()
         self.scaler = GradScaler()
         self.loss_fn = BarlowTwinsLoss(correlation=correlation_bt,
@@ -94,23 +93,23 @@ class BTModel(nn.Module):
                 loss = self.training_step(view_1, view_2)
                 train_loss += loss
             self.logger.reduce(reduce_fx="sum")
-            self.logger.store({"epoch": epoch, "set": "train", "loss": train_loss})
-
-            if epoch % 5 == 0:
-                # Validation
-                val_loss = 0
-                self.eval()
-                self.logger.step()
-                for batch in tqdm(val_loader, desc="Validation"):
-                    view_1 = batch["view_1"].to(self.device)
-                    view_2 = batch["view_2"].to(self.device)
-                    loss = self.valid_step(view_1, view_2)
-                    val_loss += loss
-                self.logger.reduce(reduce_fx="sum")
-                self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss})
+            self.logger.store({"epoch": epoch, "set": "train", "loss": train_loss, **logs})
 
             if epoch % 10 == 0:
-                self.logger.info(f"Loss: train: {train_loss:.2g} / val: {val_loss:.2g}")
+                self.logger.info(f"Train loss: {train_loss:.2g}")
+                if val_loader is not None:
+                    # Validation
+                    val_loss = 0
+                    self.eval()
+                    self.logger.step()
+                    for batch in tqdm(val_loader, desc="Validation"):
+                        view_1 = batch["view_1"].to(self.device)
+                        view_2 = batch["view_2"].to(self.device)
+                        loss = self.valid_step(view_1, view_2)
+                        val_loss += loss
+                    self.logger.reduce(reduce_fx="sum")
+                    self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss, **logs})
+                    self.logger.info(f"Validation loss: {val_loss:.2g}")
                 self.logger.info(f"Training duration: {self.logger.get_duration()}")
                 self.save_chkpt(chkpt_dir=chkpt_dir,
                                 filename=f'barlowtwins_ep-{epoch}.pth',
@@ -187,10 +186,13 @@ class BTModel(nn.Module):
 
     def fine_tuning(self, train_loader, val_loader,
                     pretrained_epoch, nb_epochs, chkpt_dir, 
-                    **kwargs_optimizer):
+                    logs={}, **kwargs_optimizer):
         
         self.load_chkpt(chkpt_dir=chkpt_dir, 
                         filename=f'barlowtwins_ep-{pretrained_epoch}.pth')
+        self.save_hyperparameters(chkpt_dir, {"pretrained_epoch": pretrained_epoch,
+                                              "nb_epochs": nb_epochs,
+                                              **kwargs_optimizer})
         self.encoder.requires_grad_(False) # freeze encoder
         self.optimizer = optim.Adam(self.classifier.parameters(), **kwargs_optimizer)
         self.lr_scheduler = None
@@ -210,7 +212,7 @@ class BTModel(nn.Module):
                 loss = self.fine_tuning_step(input, label)
                 train_loss += loss
             self.logger.reduce(reduce_fx="sum")
-            self.logger.store({"epoch": epoch, "set": "train", "loss": train_loss})
+            self.logger.store({"epoch": epoch, "set": "train", "loss": train_loss, **logs})
             
             # Validation
             val_loss = 0
@@ -222,7 +224,7 @@ class BTModel(nn.Module):
                 loss = self.valid_classifier_step(input, label)
                 val_loss += loss
             self.logger.reduce(reduce_fx="sum")
-            self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss})
+            self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss, **logs})
 
             if epoch % 10 == 0:
                 self.logger.info(f"Loss: train: {train_loss:.2g} / val: {val_loss:.2g}")
@@ -236,7 +238,6 @@ class BTModel(nn.Module):
         self.logger.info(f"End of training: {self.logger.get_duration()}")
     
     def fine_tuning_step(self, input, label):
-        # FIXME : how to deal with freezing weights ?
         self.optimizer.zero_grad()
         with autocast(device_type=self.device.type, dtype=torch.float16):
             with torch.no_grad():
@@ -258,16 +259,18 @@ class BTModel(nn.Module):
         return loss.item()
     
     def test_classifier(self, loaders, splits,
-                        chkpt_dir, epoch):
+                        chkpt_dir, epoch, logs={}):
         self.logger.reset_history()
         self.load_chkpt(chkpt_dir=chkpt_dir,
                         filename=f"classifier_ep-{epoch}.pth")
         self.eval()
         for split, loader in zip(splits, loaders):
             self.logger.step()
-            logs = self.test_classifier_step(loader=loader,
-                                             split=split)
+            metrics = self.test_classifier_step(loader=loader,
+                                                split=split)
             self.logger.store({"epoch": epoch,
+                               "split": split,
+                               **metrics,
                                **logs})
         self.logger.save(chkpt_dir, filename="_test")
     
@@ -284,7 +287,6 @@ class BTModel(nn.Module):
         y_pred = np.asarray(y_pred)
         y_true = np.asarray(y_true)
         logs = {
-            "split": split,
             "roc_auc": roc_auc_score(y_true=y_true, y_score=y_pred),
             "balanced_accuracy": balanced_accuracy_score(y_true=y_true, 
                                         y_pred=(y_pred > 0.5).astype(int))
@@ -301,7 +303,7 @@ class BTModel(nn.Module):
         if self.classifier is not None:
             to_save["classifier"] = self.classifier.state_dict()
         if self.projector is not None:
-            to_save["projector"] = self.project.state_dict()
+            to_save["projector"] = self.projector.state_dict()
         torch.save(to_save,
                    os.path.join(chkpt_dir, filename))
         if save_optimizer:
