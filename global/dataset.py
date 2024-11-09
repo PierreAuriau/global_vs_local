@@ -35,7 +35,9 @@ class UKBDataset(Dataset):
         self.two_views = two_views
                 
         # 1) Loads globally all the data
-        self.metadata = pd.read_csv(os.path.join(config.home_local, "ukbiobank_t1mri_skeleton_participants.csv"), dtype=self._id_types)
+        self.metadata = pd.read_csv(os.path.join(config.path_to_data,
+                                                 "ukbiobank",
+                                                 "ukbiobank_t1mri_skeleton_participants.csv"), dtype=self._id_types)
         self.scheme = self.load_scheme()
 
         # 2) Selects the data to load in memory according to selected scheme
@@ -78,6 +80,14 @@ class UKBDataset(Dataset):
     
     def load_scheme(self):
         scheme_df = pd.read_csv(os.path.join(config.path2schemes, self._train_val_scheme), dtype=self._id_types)
+        if len(scheme_df) != len(self.metadata) :
+            scheme_df = pd.merge(self.metadata[self._unique_keys], scheme_df, 
+                                 on=self._unique_keys, how="inner",
+                                 validate="1:1")
+        elif (scheme_df[self._unique_keys] != self.metadata[self._unique_keys]).any().any():
+            scheme_df = pd.merge(self.metadata[self._unique_keys], scheme_df, 
+                                 on=self._unique_keys, how="inner",
+                                 validate="1:1")
         return scheme_df
     
     def __getitem__(self, idx: int):
