@@ -185,8 +185,8 @@ class BTModel(nn.Module):
         self.logger.save(chkpt_dir, filename="_test")
 
     def fine_tuning(self, train_loader, val_loader,
-                    pretrained_epoch, nb_epochs, chkpt_dir, 
-                    logs={}, **kwargs_optimizer):
+                    pretrained_epoch, loss_fn, nb_epochs, 
+                    chkpt_dir, logs={}, **kwargs_optimizer):
         
         self.load_chkpt(chkpt_dir=chkpt_dir, 
                         filename=f'barlowtwins_ep-{pretrained_epoch}.pth')
@@ -198,7 +198,7 @@ class BTModel(nn.Module):
         self.lr_scheduler = None
         self.scaler = GradScaler()
         self.logger.reset_history()
-        self.loss_fn = nn.BCEWithLogitsLoss()
+        self.loss_fn = loss_fn
         for epoch in range(nb_epochs):
             self.logger.info(f"Epoch: {epoch}")
             # Training
@@ -259,18 +259,20 @@ class BTModel(nn.Module):
         return loss.item()
     
     def test_classifier(self, loaders, splits,
-                        chkpt_dir, epoch, logs={}):
+                        chkpt_dir, epoch, metrics, logs={}):
+        self.logger.info("Testing predictor")
+        self.metrics = metrics
         self.logger.reset_history()
         self.load_chkpt(chkpt_dir=chkpt_dir,
                         filename=f"classifier_ep-{epoch}.pth")
         self.eval()
         for split, loader in zip(splits, loaders):
             self.logger.step()
-            metrics = self.test_classifier_step(loader=loader,
+            values = self.test_classifier_step(loader=loader,
                                                 split=split)
             self.logger.store({"epoch": epoch,
                                "split": split,
-                               **metrics,
+                               **values,
                                **logs})
         self.logger.save(chkpt_dir, filename="_test")
     
@@ -286,12 +288,11 @@ class BTModel(nn.Module):
             y_true.extend(batch["label"].numpy())
         y_pred = np.asarray(y_pred)
         y_true = np.asarray(y_true)
-        logs = {
-            "roc_auc": roc_auc_score(y_true=y_true, y_score=y_pred),
-            "balanced_accuracy": balanced_accuracy_score(y_true=y_true, 
-                                        y_pred=(y_pred > 0.5).astype(int))
-               }
-        return logs
+        values = {}
+        for name, metric in self.metrics.items():
+            values[name] = metric(y_true=y_true,
+                                  y_pred=y_pred)
+        return values
         
     def save_hyperparameters(self, chkpt_dir, hp={}):
         hp = {"n_embedding": self.n_embedding, **hp}

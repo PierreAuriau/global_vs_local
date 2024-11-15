@@ -7,6 +7,11 @@ import argparse
 import json
 import re
 
+import torch
+import torch.nn as nn
+from sklearn.metrics import balanced_accuracy_score, mean_absolute_error, \
+                            mean_squared_error, r2_score, roc_auc_score
+
 # from project
 from log import setup_logging
 from model import BTModel
@@ -55,9 +60,12 @@ def fine_tune_bt_model(chkpt_dir, dataset,
     val_loader = datamanager.get_dataloader(split="validation",
                                             batch_size=batch_size,
                                             num_workers=num_workers)
-    
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(datamanager.dataset["train"].target.mean(), 
+                                                           dtype=torch.float32,
+                                                           device=model.device))
+
     model.fine_tuning(train_loader, val_loader, pretrained_epoch=pretrained_epoch, 
-                        nb_epochs=nb_epochs, chkpt_dir=chkpt_dir, 
+                        loss_fn=loss_fn, nb_epochs=nb_epochs, chkpt_dir=chkpt_dir, 
                         lr=lr, weight_decay=weight_decay,
                         logs={"dataset": dataset, "label": "diagnosis"})
     
@@ -70,11 +78,15 @@ def fine_tune_bt_model(chkpt_dir, dataset,
     test_loader = datamanager.get_dataloader(split="test",
                                              batch_size=batch_size,
                                              num_workers=num_workers)
-    
+    metrics = {
+        "roc_auc": lambda y_true, y_pred: roc_auc_score(y_true=y_true, y_score=y_pred),
+        "balanced_accuracy": lambda y_true, y_pred: balanced_accuracy_score( y_true=y_true,
+                                                                            y_pred=y_pred.argmax(axis=1))
+    }
     model.test_classifier(loaders=[train_loader, val_loader,
                                     test_intra_loader, test_loader],
                             splits=["train", "validation", "test_intra", "test"],
-                            epoch=(nb_epochs-1), chkpt_dir=chkpt_dir,
+                            epoch=(nb_epochs-1), metrics=metrics, chkpt_dir=chkpt_dir,
                             logs={"dataset": dataset, "label": "diagnosis"})
 
 def train(params):
@@ -105,7 +117,7 @@ def fine_tune(params):
                                     f"barlowtwins_ep-{epoch_f}.pth"),
                     os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth"))
         
-        fine_tune_bt_model(chkpt_dir, dataset,
+        fine_tune_bt_model(chkpt_dir_dt, dataset,
                            n_embedding=n_embedding, 
                            pretrained_epoch=epoch_f,
                            nb_epochs=params.get("nb_epochs", config.nb_epochs_ft), 

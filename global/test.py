@@ -12,6 +12,8 @@ import numpy as np
 from umap import UMAP
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
+from sklearn.metrics import balanced_accuracy_score, mean_absolute_error, \
+                            mean_squared_error, r2_score, roc_auc_score
 import matplotlib.pyplot as plt
 
 # from project
@@ -57,13 +59,15 @@ def test_bt_model_dx(chkpt_dir):
                                   data_augmentation=None)
         chkpt_dir_dt = os.path.join(chkpt_dir, dataset)
         os.makedirs(chkpt_dir_dt, exist_ok=True)
-
+        
+        to_unlink = []
         for epoch in epochs_to_test:
             if not os.path.exists(os.path.join(chkpt_dir_dt, 
                                                f"barlowtwins_ep-{epoch}.pth")):
                 os.symlink(os.path.join(chkpt_dir,
                                         f"barlowtwins_ep-{epoch}.pth"),
                         os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch}.pth"))
+                to_unlink.append(os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch}.pth"))
         train_loader = datamanager.get_dataloader(split="train", shuffle=False,
                                                 batch_size=config.batch_size,
                                                 num_workers=config.num_workers)
@@ -75,6 +79,8 @@ def test_bt_model_dx(chkpt_dir):
                                 label="diagnosis",
                                 epochs=epochs_to_test, 
                                 chkpt_dir=chkpt_dir_dt)
+        for link in to_unlink:
+            os.unlink(link)
 
 def test_classifier(chkpt_dir, epoch=-1):
     with open(os.path.join(chkpt_dir, "hyperparameters.json"), "r") as json_file:
@@ -86,7 +92,7 @@ def test_classifier(chkpt_dir, epoch=-1):
         with open(os.path.join(chkpt_dir_dt, "hyperparameters.json"), "r") as json_file:
             hyperparameters = json.load(json_file)
         if epoch < 0:
-            epoch = hyperparameters.get("nb_epochs", config.nb_epochs_ft) - epoch
+            epoch = hyperparameters.get("nb_epochs", config.nb_epochs_ft) + epoch
         datamanager = DataManager(dataset=dataset, label="diagnosis", two_views=False,  
                                 data_augmentation=None)
         splits = ["train", "validation", "test_intra", "test"]
@@ -94,9 +100,14 @@ def test_classifier(chkpt_dir, epoch=-1):
                                             batch_size=config.batch_size, 
                                             num_workers=config.num_workers) 
                     for s in splits]
+        metrics = {
+        "roc_auc": lambda y_true, y_pred: roc_auc_score(y_true=y_true, y_score=y_pred),
+        "balanced_accuracy": lambda y_true, y_pred: balanced_accuracy_score( y_true=y_true,
+                                                                            y_pred=y_pred.argmax(axis=1))
+                                                                            }
         
         model.test_classifier(loaders=loaders, splits=splits, 
-                              epoch=epoch, chkpt_dir=chkpt_dir_dt,
+                              epoch=epoch, metrics=metrics, chkpt_dir=chkpt_dir_dt,
                               logs={"dataset": dataset, "label": "diagnosis"})
     
 def reduce_latent_space(chkpt_dir, pretrained_epoch=-1,
@@ -105,7 +116,7 @@ def reduce_latent_space(chkpt_dir, pretrained_epoch=-1,
         hyperparameters = json.load(json_file)
     n_embedding = hyperparameters.get("n_embedding", config.n_embedding)
     if pretrained_epoch < 0 :
-        pretrained_epoch = hyperparameters.get("nb_epochs", config.nb_epochs) - pretrained_epoch
+        pretrained_epoch = hyperparameters.get("nb_epochs", config.nb_epochs) + pretrained_epoch
     if with_metadata:
         scheme = pd.read_csv(os.path.join(config.path2schemes, ""))
         metadata = pd.read_csv(os.path.join(config.path2data, ""))
