@@ -30,18 +30,15 @@ class ToArray(nn.Module):
 class DataManager(object):
 
     def __init__(self, dataset: str, area: str,
-                 label: str = None, batch_size: int = 1,
-                 **dataloader_kwargs):
+                 label: str = None, reduced: bool = False):
         
         self.logger = logging.getLogger("datamanager")
-        self.batch_size = batch_size
         self.label = label
-        self.dataloader_kwargs = dataloader_kwargs   
 
         if label == "sex":
             target_mapping = {"H": 0, "F": 1}
         elif label == "diagnosis":
-            target_mapping = {"control": 0, 
+            target_mapping = {"control": 0,     
                               "asd": 1,
                               "bd": 1, "bipolar disorder": 1, "psychotic bd": 1, 
                               "scz": 1}
@@ -53,25 +50,30 @@ class DataManager(object):
         self.dataset = dict()
         self.dataset["train"] = ClinicalDataset(split="train", label=label, area=area,
                                                 dataset=dataset, transforms=tr,
-                                                target_mapping=target_mapping)
+                                                target_mapping=target_mapping,
+                                                reduced=reduced)
         self.dataset["validation"] = ClinicalDataset(split="validation", label=label, area=area,
-                                                        dataset=dataset, transforms=tr,
-                                                        target_mapping=target_mapping)
+                                                     dataset=dataset, transforms=tr,
+                                                     target_mapping=target_mapping,
+                                                     reduced=reduced)
         self.dataset["test_intra"] = ClinicalDataset(split="test_intra", label=label, area=area,
-                                                        dataset=dataset, transforms=tr,
-                                                        target_mapping=target_mapping)
+                                                     dataset=dataset, transforms=tr,
+                                                     target_mapping=target_mapping,
+                                                     reduced=reduced)
         self.dataset["test"] = ClinicalDataset(split="test", label=label, area=area,
-                                                    dataset=dataset, transforms=tr,
-                                                    target_mapping=target_mapping)
+                                               dataset=dataset, transforms=tr,
+                                               target_mapping=target_mapping,
+                                               reduced=reduced)
 
-    def get_dataloader(self, split, **kwargs):
+    def get_dataloader(self, split, batch_size, **kwargs):
         dataset = self.dataset[split]
-        drop_last = True if len(dataset) % self.batch_size == 1 else False
+        drop_last = True if len(dataset) % batch_size == 1 else False
         if drop_last:
             self.logger.warning(f"The last subject of the {split} set will not be feed into the model ! "
-                                f"Change the batch size ({self.batch_size}) to keep all subjects ({len(dataset)})")
-        loader = DataLoader(dataset, batch_size=self.batch_size,
+                                f"Change the batch size ({batch_size}) to keep all subjects ({len(dataset)})")
+        loader = DataLoader(dataset, batch_size=batch_size,
                             drop_last=drop_last, **kwargs)
+        loader.split = split # FIXME : to keep ?
         return loader
         
     def __str__(self):

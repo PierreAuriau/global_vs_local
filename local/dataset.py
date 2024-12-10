@@ -22,7 +22,7 @@ class ClinicalDataset(Dataset):
     def __init__(self, dataset: str, area: str,
                  split: str = 'train', label: str = "diagnosis", 
                  transforms: Callable[[np.ndarray], np.ndarray] = None,
-                 target_mapping: dict = None):
+                 target_mapping: dict = None, reduced: bool = None):
         """
         :param dataset: str, either 'asd', 'bd' or 'scz'
         :param area: strn one of the brain area
@@ -30,12 +30,14 @@ class ClinicalDataset(Dataset):
         :param split: str, either 'train', 'validation'
         :param transforms: Callable, data transformations
         :param target_mapping: dict, mapping between labels and int to predict
+        :param reduced: bool, used reduced components by PCA or not
         """
         # 0) set attributes
         self.dataset = dataset
         self.area = area
         self.split = split
         self.transforms = transforms
+        self.reduced = reduced
 
         # 1) Loads globally all the data
         self.metadata = pd.concat([pd.read_csv(os.path.join(config.path2data, area,
@@ -44,8 +46,9 @@ class ClinicalDataset(Dataset):
                                    for s in self._studies],
                        ignore_index=True, sort=False)
         self.scheme = self.load_scheme()
+        filename = "reduced" if reduced else "skeleton"
         self.images = [np.load(os.path.join(config.path2data, area,
-                                            f"{s}_skeleton_{area.lower()}.npy"), mmap_mode='r')
+                                            f"{s}_{filename}_{area.lower()}.npy"), mmap_mode='r')
                        for s in self._studies]
         
         if len(self.metadata) != np.sum([len(arr) for arr in self.images]):
@@ -138,11 +141,7 @@ class ClinicalDataset(Dataset):
         if self.target is not None:
             sample["label"] = self.target[idx]
         (dataset_idx, sample_idx) = self._mapping_idx(idx)
-        try:
-            arr = self.images[dataset_idx][sample_idx]
-        except IndexError as e:
-            import pdb
-            pdb.set_trace()
+        arr = self.images[dataset_idx][sample_idx]
         if self.transforms is not None:
             sample["input"] = self.transforms(arr.copy())
         else:
