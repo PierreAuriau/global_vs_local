@@ -184,17 +184,23 @@ class BTModel(nn.Module):
                 np.save(os.path.join(chkpt_dir, f"y_pred_label-{label}_epoch-{epoch}_set-{split}.npy"), y_pred)
         self.logger.save(chkpt_dir, filename="_test")
 
-    def fine_tuning(self, train_loader, val_loader,
-                    pretrained_epoch, loss_fn, nb_epochs, 
-                    chkpt_dir, logs={}, **kwargs_optimizer):
+    def transfer(self, train_loader, val_loader,
+                 pretrained_epoch, loss_fn, nb_epochs, 
+                 chkpt_dir, refit=False, logs={}, **kwargs_optimizer):
         
         self.load_chkpt(chkpt_dir=chkpt_dir, 
                         filename=f'barlowtwins_ep-{pretrained_epoch}.pth')
         self.save_hyperparameters(chkpt_dir, {"pretrained_epoch": pretrained_epoch,
                                               "nb_epochs": nb_epochs,
+                                              "loss": str(loss_fn),
                                               **kwargs_optimizer})
-        self.encoder.requires_grad_(False) # freeze encoder
-        self.optimizer = optim.Adam(self.classifier.parameters(), **kwargs_optimizer)
+        if refit:
+            self.optimizer = optim.Adam(list(self.encoder.parameters()) + list(self.classifier.parameters()),
+                                        **kwargs_optimizer)
+        else:
+            self.encoder.requires_grad_(False) # freeze encoder
+            self.encoder.eval()
+            self.optimizer = optim.Adam(self.classifier.parameters(), **kwargs_optimizer)
         self.lr_scheduler = None
         self.scaler = GradScaler()
         self.logger.reset_history()
@@ -204,27 +210,30 @@ class BTModel(nn.Module):
             # Training
             train_loss = 0
             self.classifier.train()
-            self.encoder.eval()
+            if refit:
+                self.encoder.train()
             self.logger.step()
             for batch in tqdm(train_loader, desc="train"):
                 input = batch["input"].to(self.device)
                 label = batch["label"].to(self.device)
-                loss = self.fine_tuning_step(input, label)
+                loss = self.transfer_step(input, label)
                 train_loss += loss
             self.logger.reduce(reduce_fx="sum")
             self.logger.store({"epoch": epoch, "set": "train", "loss": train_loss, **logs})
             
             # Validation
-            val_loss = 0
-            self.classifier.eval()
-            self.logger.step()
-            for batch in tqdm(val_loader, desc="Validation"):
-                input = batch["input"].to(self.device)
-                label = batch["label"].to(self.device)
-                loss = self.valid_classifier_step(input, label)
-                val_loss += loss
-            self.logger.reduce(reduce_fx="sum")
-            self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss, **logs})
+            if val_loader is not None:
+                val_loss = 0
+                self.classifier.eval()
+                self.encoder.eval()
+                self.logger.step()
+                for batch in tqdm(val_loader, desc="Validation"):
+                    input = batch["input"].to(self.device)
+                    label = batch["label"].to(self.device)
+                    loss = self.valid_classifier_step(input, label)
+                    val_loss += loss
+                self.logger.reduce(reduce_fx="sum")
+                self.logger.store({"epoch": epoch, "set": "validation", "loss": val_loss, **logs})
 
             if epoch % 10 == 0:
                 self.logger.info(f"Loss: train: {train_loss:.2g} / val: {val_loss:.2g}")
@@ -237,11 +246,10 @@ class BTModel(nn.Module):
                         filename=f'classifier_ep-{epoch}.pth')
         self.logger.info(f"End of training: {self.logger.get_duration()}")
     
-    def fine_tuning_step(self, input, label):
+    def transfer_step(self, input, label):
         self.optimizer.zero_grad()
         with autocast(device_type=self.device.type, dtype=torch.float16):
-            with torch.no_grad():
-                z = self.encoder(input)
+            z = self.encoder(input)
             pred = self.classifier(z, return_logits=True)
             loss = self.loss_fn(pred.squeeze(), label)
         self.scaler.scale(loss).backward()
@@ -271,7 +279,7 @@ class BTModel(nn.Module):
             values = self.test_classifier_step(loader=loader,
                                                 split=split)
             self.logger.store({"epoch": epoch,
-                               "split": split,
+                               "set": split,
                                **values,
                                **logs})
         self.logger.save(chkpt_dir, filename="_test")
