@@ -117,7 +117,7 @@ class UKBDataset(Dataset):
 class ClinicalDataset(Dataset):
 
     def __init__(self, dataset: str, split: str = 'train', 
-                 label: str = "diagnosis", 
+                 label: str = "diagnosis", fold: int = None,
                  transforms: Callable[[np.ndarray], np.ndarray] = None,
                  target_mapping: dict = None):
         """
@@ -130,6 +130,7 @@ class ClinicalDataset(Dataset):
         # 0) set attributes
         self.dataset = dataset
         self.split = split
+        self.fold = fold
         self.transforms = transforms
 
         # 1) Loads globally all the data
@@ -172,12 +173,7 @@ class ClinicalDataset(Dataset):
 
     @property
     def _train_val_scheme(self) -> str:
-        if self.dataset == "asd":
-            return "train_val_test_test-intra_asd_stratified.pkl"
-        elif self.dataset == "bd":
-            return "train_val_test_test-intra_bd_stratified.pkl"
-        elif self.dataset == "scz":
-            return "train_val_test_test-intra_scz_stratified.pkl"
+        return f"{self.dataset}_age_sex_diagnosis_site_stratified_10-fold.csv"
 
     @property
     def _unique_keys(self) -> List[str]:
@@ -208,9 +204,15 @@ class ClinicalDataset(Dataset):
         return mask
     
     def load_scheme(self):
-        with open(os.path.join(config.path2schemes, self._train_val_scheme), "rb") as f:
-            scheme = pickle.load(f)
-        return scheme[self.split]
+        # Old version
+        # with open(os.path.join(config.path2schemes, self._train_val_scheme), "rb") as f:
+        #     scheme = pickle.load(f)
+        # return scheme[self.split]
+        scheme = pd.read_csv(os.path.join(config.path2schemes, self._train_val_scheme), dtype=self._id_types)
+        if self.fold is None:
+            return scheme.loc[scheme["set"] == self.split, self._unique_keys]
+        else:
+            return scheme.loc[scheme[f"fold-{self.fold}"] == self.split, self._unique_keys]
     
     def _mapping_idx(self, idx: int):
         """
@@ -239,6 +241,69 @@ class ClinicalDataset(Dataset):
 
     def __str__(self):
         return f" {self.dataset.upper()}Dataset({self.split} set)"
+
+
+class NSSDataset(Dataset):
+
+    id_types = {"participant_id": str,
+                "session": int,
+                "run": int,
+                "acq": int}
+
+    def __init__(self, split: str = 'train', fold: int = 0,
+                 label: str = "NSS", 
+                 transforms: Callable[[np.ndarray], np.ndarray] = None,
+                 target_mapping: dict = None, 
+                 embeddings=False, chkpt_dir=None):
+
+        # Set attributes
+        self.split = split
+        self.fold = fold
+        self.label = label
+        self.transforms = transforms
+
+        # Load the data
+        if embeddings:
+            self.images = np.load(os.path.join(config.path_to_models, chkpt_dir, "ausz_embeddings.npy"), mmap_mode="r")
+        else:
+            self.images = np.load(os.path.join(config.path_to_data, "ausz_t1mri_skeleton_data32.npy"), mmap_mode="r")
+        self.metadata = pd.read_csv(os.path.join(config.path_to_data, "ausz_t1mri_participants.csv"), dtype=self.id_types)
+        self.scheme = pd.read_csv(os.path.join(config.path_to_schemes, "nss_diagnosis_stratified_10-fold.csv"), dtype=self.id_types)
+        
+        # Select data
+        assert (self.scheme["participant_id"] == self.metadata["participant_id"]).all(), "The scheme and the metadata do not have the same subject order"
+        if fold == "all":
+            mask = np.ones(self.images.shape[0]).astype(bool)
+        else:
+            mask = self.scheme[f"fold{fold}"] == split
+        self.images = self.images[mask]
+        self.metadata = self.metadata[mask]
+        
+        # Get the label to predict
+        if label is not None:
+            assert self.label in self.metadata.columns, \
+                f"Inconsistent files: missing {self.label} in participants DataFrame"
+            self.target = self.metadata[self.label]
+            if target_mapping is not None:
+                self.target = self.target.replace(target_mapping)
+            assert self.target.isna().sum().sum() == 0, f"Missing values in {self.label} column"
+            self.target = self.target.values.astype(np.float32)
+        else:
+            self.target = None
+    
+    def __getitem__(self, idx: int):
+        sample = dict()
+        if self.target is not None:
+            sample["label"] = self.target[idx]
+        arr = self.images[idx]
+        if self.transforms is not None:
+            sample["input"] = self.transforms(arr.copy())
+        else:
+            sample["input"] = arr.copy()
+        return sample
+    
+    def __len__(self):
+        return len(self.metadata)
     
 if __name__ == "__main__":
     
@@ -251,7 +316,7 @@ if __name__ == "__main__":
     assert set(np.unique(item["input"])).issubset({0, 1}), "Wrong values in skeleton"
     assert item["input"].dtype == np.float32, "Wrong data type"
     
-    for split, n in zip(("train", "validation", "test_intra", "test"),
+    for split, n in zip(config.splits,
                         (1299, 163, 161, 116)):
         asddataset = ClinicalDataset(dataset="asd", split=split,
                                     target_mapping={"asd": 1, "control": 0})
@@ -262,7 +327,7 @@ if __name__ == "__main__":
         assert set(np.unique(item["input"])).issubset({0, 1}), "Wrong values in skeleton"
         assert item["input"].dtype == np.float32, "Wrong data type"
     
-    for split, n in zip(("train", "validation", "test_intra", "test"),
+    for split, n in zip(config.splits,
                         (831, 101, 106, 131)):
         bddataset = ClinicalDataset(dataset="bd", split=split,
                                     target_mapping={"bd": 1, "psychotic bd": 1, "bipolar disorder": 1, "control": 0})
@@ -273,7 +338,7 @@ if __name__ == "__main__":
         assert set(np.unique(item["input"])).issubset({0, 1}), "Wrong values in skeleton"
         assert item["input"].dtype == np.float32, "Wrong data type"
     
-    for split, n in zip(("train", "validation", "test_intra", "test"),
+    for split, n in zip(config.splits,
                         (928, 116, 118, 130)):
         sczdataset = ClinicalDataset(dataset="scz", split=split,
                                     target_mapping={"scz": 1, "control": 0})
