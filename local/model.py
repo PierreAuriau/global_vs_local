@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 
 from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.model_selection import GridSearchCV, PredefinedSplit
 from sklearn.metrics import balanced_accuracy_score, mean_absolute_error, \
                             mean_squared_error, r2_score, roc_auc_score
 
@@ -30,9 +31,9 @@ config = Config()
 
 class DLModel(nn.Module):
 
-    def __init__(self):
+    def __init__(self, latent_dim):
         super().__init__()
-        self.classifier = Classifier(latent_dim=config.latent_dim,
+        self.classifier = Classifier(latent_dim=latent_dim,
                                      activation="sigmoid")
         self.logger = logging.getLogger("dlmodel")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -55,7 +56,9 @@ class DLModel(nn.Module):
         self.logger.reset_history()
         self.save_hyperparameters(chkpt_dir=chkpt_dir,
                                   hp=kwargs_optimizer)
-        self.loss_fn = nn.BCEWithLogitsLoss()
+        self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(1/train_loader.dataset.target.mean() - 1, 
+                                                                    dtype=torch.float32,
+                                                                    device=self.device))
         for epoch in range(nb_epochs):
             self.logger.info(f"Epoch: {epoch}")
             # Training
@@ -122,10 +125,12 @@ class DLModel(nn.Module):
         for split, loader in zip(splits, loaders):
             self.logger.step()
             if save_y_pred:
-                test_logs, y_pred = self.test_step(loader=loader, split=split, 
+                test_logs, y_pred, y_true = self.test_step(loader=loader, split=split, 
                                               return_y_pred=True)
                 np.save(os.path.join(chkpt_dir, f"y_pred_ep-{epoch}_set-{split}.npy"),
                         y_pred.astype(np.float32))
+                np.save(os.path.join(chkpt_dir, f"y_true_ep-{epoch}_set-{split}.npy"),
+                        y_true.astype(np.float32))
             else:
                 test_logs = self.test_step(loader=loader, split=split)
             self.logger.store({"epoch": epoch,
@@ -151,33 +156,48 @@ class DLModel(nn.Module):
                                         y_pred=(y_pred > 0.5).astype(int))
                }
         if return_y_pred:
-            return logs, y_pred
+            return logs, y_pred, y_true
         return logs
     
     def test_linear_probe(self, predictions, labels, epoch,
                           chkpt_dir, logs={}, save_y_pred=False):
         
         # FIXME : add loadings ?
-        # FIXME : return y_true in test ?
+        """
         self.logger.reset_history()
-        clf = LogisticRegression(max_iter=10000, C=1.0, penalty="l2", 
+        clf = LogisticRegression(max_iter=1000, C=1.0, penalty="l2", 
                                  fit_intercept=True)
         clf.fit(predictions["train"], labels["train"])
-        for split in ("train", "validation", "test", "test_intra"):
+        
+        cv = [(range(len(labels["train"])),
+                                   range(len(labels["train"]), 
+                                         len(labels["train"]) + len(labels["validation"])))]
+        """
+        cv = PredefinedSplit([-1 for _ in range(len(labels["train"]))] + \
+                             [0 for _ in range(len(labels["validation"]))])
+        clf = GridSearchCV(LogisticRegression(max_iter=1000),
+                           param_grid={"C": 10. ** np.arange(-1, 3)},
+                           cv=cv, 
+                           n_jobs=config.num_workers)
+        X = np.concatenate([predictions["train"], predictions["validation"]], axis=0)
+        y = np.concatenate([labels["train"], labels["validation"]], axis=0)
+        clf.fit(X, y)
+        for split in predictions.keys():
             self.logger.step()
             y_pred = clf.predict_proba(predictions[split])
             y_true = labels[split]
-
             self.logger.store({
                             "epoch": epoch,
                             "set": split,
                             "roc_auc": roc_auc_score(y_score=y_pred[:, 1], y_true=y_true),
                             "balanced_accuracy": balanced_accuracy_score(y_pred=y_pred.argmax(axis=1), y_true=y_true),
                             **logs})
+            if save_y_pred:
+                np.save(os.path.join(chkpt_dir, f"y_pred_epoch-{epoch}_set-{split}.npy"), y_pred)
+                np.save(os.path.join(chkpt_dir, f"y_true_epoch-{epoch}_set-{split}.npy"), y_true)
         if save_y_pred:
-            np.save(os.path.join(chkpt_dir, f"y_pred_epoch-{epoch}_set-{split}.npy"), y_pred)
-            np.save(os.path.join(chkpt_dir, f"y_true_epoch-{epoch}_set-{split}.npy"), y_true)
-            np.save(os.path.join(chkpt_dir, f"coef_epoch-{epoch}_set-{split}.npy"), clf.coef_)
+            # np.save(os.path.join(chkpt_dir, f"coef_epoch-{epoch}.npy"), clf.coef_)
+            np.save(os.path.join(chkpt_dir, f"coef_epoch-{epoch}.npy"), clf.best_estimator_.coef_)
         self.logger.save(chkpt_dir, filename="_test")
         
     def save_hyperparameters(self, chkpt_dir, hp={}):
