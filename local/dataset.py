@@ -19,10 +19,10 @@ config = Config()
 
 class ClinicalDataset(Dataset):
 
-    def __init__(self, dataset: str, area: str,
-                 split: str = 'train', label: str = "diagnosis", 
+    def __init__(self, dataset: str, area: str, split: str = 'train', 
+                 label: str = "diagnosis", fold: int = None,
                  transforms: Callable[[np.ndarray], np.ndarray] = None,
-                 target_mapping: dict = None, reduced: bool = None):
+                 target_mapping: dict = None, reduced: bool = None,):
         """
         :param dataset: str, either 'asd', 'bd' or 'scz'
         :param area: strn one of the brain area
@@ -36,6 +36,7 @@ class ClinicalDataset(Dataset):
         self.dataset = dataset
         self.area = area
         self.split = split
+        self.fold = fold
         self.transforms = transforms
         self.reduced = reduced
 
@@ -86,12 +87,7 @@ class ClinicalDataset(Dataset):
 
     @property
     def _train_val_scheme(self) -> str:
-        if self.dataset == "asd":
-            return "train_val_test_test-intra_asd_stratified.pkl"
-        elif self.dataset == "bd":
-            return "train_val_test_test-intra_bd_stratified.pkl"
-        elif self.dataset == "scz":
-            return "train_val_test_test-intra_scz_stratified.pkl"
+        return f"{self.dataset}_age_sex_diagnosis_site_stratified_10-fold.csv"
 
     @property
     def _unique_keys(self) -> List[str]:
@@ -122,9 +118,16 @@ class ClinicalDataset(Dataset):
         return mask
     
     def load_scheme(self):
+        """ Old version
         with open(os.path.join(config.path2schemes, self._train_val_scheme), "rb") as f:
             scheme = pickle.load(f)
-        return scheme[self.split]
+        return scheme[self.split]"""
+        scheme = pd.read_csv(os.path.join(config.path2schemes, self._train_val_scheme), dtype=self._id_types)
+        if self.fold is None:
+            return scheme.loc[scheme["set"] == self.split, self._unique_keys]
+        else:
+            return scheme.loc[scheme[f"fold-{self.fold}"] == self.split, self._unique_keys]
+    
     
     def _mapping_idx(self, idx: int):
         """
@@ -159,7 +162,7 @@ if __name__ == "__main__":
 
     for area in config.areas:
     
-        for split, n in zip(("train", "validation", "test_intra", "test"),
+        for split, n in zip(config.splits,
                             (1299, 163, 161, 116)):
             asddataset = ClinicalDataset(dataset="asd", split=split, area="SC-sylv_left",
                                         target_mapping={"asd": 1, "control": 0})
@@ -170,7 +173,7 @@ if __name__ == "__main__":
             assert item["input"].dtype == np.float32, "Wrong data type"
             assert not np.isnan(item["input"]).any(axis=(0, 1, 2)), "Found NaN in input"
         
-        for split, n in zip(("train", "validation", "test_intra", "test"),
+        for split, n in zip(config.splits,
                             (831, 101, 106, 131)):
             bddataset = ClinicalDataset(dataset="bd", split=split, area="SC-SPoC_left",
                                         target_mapping={"bd": 1, "psychotic bd": 1, "bipolar disorder": 1, "control": 0})
@@ -180,7 +183,7 @@ if __name__ == "__main__":
             assert np.all(item["input"].shape == (256, )), "Wrong image shape"
             assert item["input"].dtype == np.float32, "Wrong data type"
         
-        for split, n in zip(("train", "validation", "test_intra", "test"),
+        for split, n in zip(config.splits,
                             (928, 101, 118, 130)):
             sczdataset = ClinicalDataset(dataset="scz", split=split, area="SC-sylv_left",
                                         target_mapping={"scz": 1, "control": 0})

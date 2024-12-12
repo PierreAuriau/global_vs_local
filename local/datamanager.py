@@ -13,7 +13,9 @@ from torch.utils.data import DataLoader
 
 # project imports
 from dataset import ClinicalDataset
+from config import Config
 
+config = Config()
 
 class ToTensor(nn.Module):
     def forward(self, arr):
@@ -30,10 +32,12 @@ class ToArray(nn.Module):
 class DataManager(object):
 
     def __init__(self, dataset: str, area: str,
-                 label: str = None, reduced: bool = False):
+                 label: str = None, fold: int = None, 
+                 reduced: bool = False):
         
         self.logger = logging.getLogger("datamanager")
         self.label = label
+        self.fold = fold
 
         if label == "sex":
             target_mapping = {"H": 0, "F": 1}
@@ -48,22 +52,11 @@ class DataManager(object):
         tr = ToTensor()
         
         self.dataset = dict()
-        self.dataset["train"] = ClinicalDataset(split="train", label=label, area=area,
-                                                dataset=dataset, transforms=tr,
-                                                target_mapping=target_mapping,
-                                                reduced=reduced)
-        self.dataset["validation"] = ClinicalDataset(split="validation", label=label, area=area,
-                                                     dataset=dataset, transforms=tr,
-                                                     target_mapping=target_mapping,
-                                                     reduced=reduced)
-        self.dataset["test_intra"] = ClinicalDataset(split="test_intra", label=label, area=area,
-                                                     dataset=dataset, transforms=tr,
-                                                     target_mapping=target_mapping,
-                                                     reduced=reduced)
-        self.dataset["test"] = ClinicalDataset(split="test", label=label, area=area,
-                                               dataset=dataset, transforms=tr,
-                                               target_mapping=target_mapping,
-                                               reduced=reduced)
+        for split in config.splits:
+            self.dataset[split] = ClinicalDataset(split=split, label=label, area=area,
+                                                    dataset=dataset, transforms=tr,
+                                                    target_mapping=target_mapping,
+                                                    reduced=reduced, fold=fold)
 
     def get_dataloader(self, split, batch_size, **kwargs):
         dataset = self.dataset[split]
@@ -77,16 +70,16 @@ class DataManager(object):
         return loader
         
     def __str__(self):
-        return "DataManager"
+        return f"DataManager"
     
 if __name__ == "__main__":
     # test
-    datamanager = DataManager(dataset="bd", area="SC-SPoC_left",
-                              label="diagnosis", batch_size=32)
-    for split in ("train", "validation", "test_intra", "test"):
+    datamanager = DataManager(dataset="bd", area="SC-SPoC_left", fold=1,
+                              label="diagnosis")
+    for split in ("train", "validation", "internal_test", "external_test"):
         print("# Split:", split)
         print("nb sbj:", len(datamanager.dataset[split]))
-        loader = datamanager.get_dataloader(split=split)
+        loader = datamanager.get_dataloader(split=split, batch_size=60)
         print("nb batch:", len(loader))
         for i, sample in enumerate(loader):
             print(split, i)
