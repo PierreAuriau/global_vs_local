@@ -95,18 +95,17 @@ def test_classifier(chkpt_dir, epoch=-1):
             epoch = hyperparameters.get("nb_epochs", config.nb_epochs_ft) + epoch
         datamanager = DataManager(dataset=dataset, label="diagnosis", two_views=False,  
                                 data_augmentation=None)
-        splits = ["train", "validation", "test_intra", "test"]
         loaders = [datamanager.get_dataloader(split=s, 
                                             batch_size=config.batch_size, 
                                             num_workers=config.num_workers) 
-                    for s in splits]
+                    for s in config.splits]
         metrics = {
         "roc_auc": lambda y_true, y_pred: roc_auc_score(y_true=y_true, y_score=y_pred),
         "balanced_accuracy": lambda y_true, y_pred: balanced_accuracy_score( y_true=y_true,
                                                                             y_pred=y_pred.argmax(axis=1))
                                                                             }
         
-        model.test_classifier(loaders=loaders, splits=splits, 
+        model.test_classifier(loaders=loaders, splits=config.splits, 
                               epoch=epoch, metrics=metrics, chkpt_dir=chkpt_dir_dt,
                               logs={"dataset": dataset, "label": "diagnosis"})
     
@@ -169,15 +168,15 @@ def reduce_latent_space(chkpt_dir, pretrained_epoch=-1,
         val_loader = datamanager.get_dataloader(split="validation", 
                                                 batch_size=config.batch_size,
                                                 num_workers=config.num_workers)
-        test_intra_loader = datamanager.get_dataloader(split="test_intra",
+        test_int_loader = datamanager.get_dataloader(split="internal_test",
                                                        batch_size=config.batch_size,
                                                        num_workers=config.num_workers)
-        test_loader = datamanager.get_dataloader(split="test",
+        test_ext_loader = datamanager.get_dataloader(split="external_test",
                                                  batch_size=config.batch_size,
                                                  num_workers=config.num_workers)
             
-        for split, loader in zip(["train", "validation", "test_intra", "test"],
-                                 [train_loader, val_loader, test_intra_loader, test_loader]
+        for split, loader in zip(["train", "validation", "internal_test", "external_test"],
+                                 [train_loader, val_loader, test_int_loader, test_ext_loader]
                                  ):
             z = model.get_embeddings(loader)
             z_red = reducer.transform(z)
