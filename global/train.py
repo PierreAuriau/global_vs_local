@@ -95,9 +95,9 @@ def fine_tune_bt_model(chkpt_dir, dataset,
     }
     model.test_classifier(loaders=[train_loader, val_loader,
                                    internal_test_loader, external_test_loader],
-                            splits=["train", "validation", "internal_test", "external_test"],
-                            epoch=(nb_epochs-1), metrics=metrics, chkpt_dir=chkpt_dir,
-                            logs=logs)
+                          splits=["train", "validation", "internal_test", "external_test"],
+                          epoch=(nb_epochs-1), metrics=metrics, chkpt_dir=chkpt_dir,
+                          logs=logs)
 
 def train(params):
 
@@ -142,20 +142,20 @@ def fine_tune(params):
                 logger.info(f"Fold: {fold}")
                 chkpt_dir_dt = os.path.join(chkpt_dir, dataset, f"fold-{fold}")
                 os.makedirs(chkpt_dir_dt, exist_ok=True)
-                if not os.path.exists(os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth")):
+                if not os.path.islink(os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth")):
                     os.symlink(os.path.join(chkpt_dir,
                                             f"barlowtwins_ep-{epoch_f}.pth"),
                             os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth"))
                 
                 fine_tune_bt_model(chkpt_dir_dt, dataset,
-                                n_embedding=n_embedding, 
-                                pretrained_epoch=epoch_f,
-                                fold=fold,
-                                nb_epochs=params.get("nb_epochs", config.nb_epochs_ft), 
-                                lr=params.get("lr", config.lr_ft), 
-                                weight_decay=params.get("weight_decay", config.weight_decay_ft),
-                                batch_size=params.get("batch_size", config.batch_size), 
-                                num_workers=params.get("num_workers", config.num_workers))
+                                   n_embedding=n_embedding, 
+                                   pretrained_epoch=epoch_f,
+                                   fold=fold,
+                                   nb_epochs=params.get("nb_epochs", config.nb_epochs_ft), 
+                                   lr=params.get("lr", config.lr_ft), 
+                                   weight_decay=params.get("weight_decay", config.weight_decay_ft),
+                                   batch_size=params.get("batch_size", config.batch_size), 
+                                   num_workers=params.get("num_workers", config.num_workers))
 
 def nss_predictions(params):
     chkpt_dir = params["chkpt_dir"]
@@ -163,13 +163,14 @@ def nss_predictions(params):
     with open(os.path.join(chkpt_dir, "hyperparameters.json"), "r") as json_file:
         hyperparameters = json.load(json_file)
     n_embedding = hyperparameters.get("n_embedding", config.n_embedding)
-    epoch_f = hyperparameters.get("nb_epochs", config.nb_epochs) - 1
-
+    #epoch_f = hyperparameters.get("nb_epochs", config.nb_epochs) - 1
+    epoch_f = 299
+    
     for fold in range(nb_folds):
         logger.info(f"Fold: {fold}")
         chkpt_dir_dt = os.path.join(chkpt_dir, "ausz", f"fold-{fold}")
         os.makedirs(chkpt_dir_dt, exist_ok=True)
-        if not os.path.exists(os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth")):
+        if not os.path.islink(os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth")):
             os.symlink(os.path.join(chkpt_dir,
                                     f"barlowtwins_ep-{epoch_f}.pth"),
                     os.path.join(chkpt_dir_dt, f"barlowtwins_ep-{epoch_f}.pth"))
@@ -187,37 +188,30 @@ def nss_predictions(params):
         train_loader = datamanager.get_dataloader(split="train", shuffle=True,
                                                 batch_size=batch_size,
                                                 num_workers=num_workers)
-        val_loader = datamanager.get_dataloader(split="validation",
+        test_loader = datamanager.get_dataloader(split="test",
                                                 batch_size=batch_size,
                                                 num_workers=num_workers)
         loss_fn = nn.L1Loss()
         logs = {"dataset": "ausz", "label": "nss", "fold": fold}
-        model.fine_tuning(train_loader, val_loader, pretrained_epoch=epoch_f, 
-                            loss_fn=loss_fn, nb_epochs=nb_epochs, chkpt_dir=chkpt_dir, 
+        model.transfer(train_loader, test_loader, pretrained_epoch=epoch_f, 
+                            loss_fn=loss_fn, nb_epochs=nb_epochs, chkpt_dir=chkpt_dir_dt, 
                             lr=lr, weight_decay=weight_decay,
                             logs=logs)
         
         train_loader = datamanager.get_dataloader(split="train", shuffle=False,
                                         batch_size=config.batch_size,
                                         num_workers=config.num_workers)
-        internal_test_loader = datamanager.get_dataloader(split="internal_test",
-                                                        batch_size=batch_size,
-                                                        num_workers=num_workers)
-        external_test_loader = datamanager.get_dataloader(split="external_test",
-                                                        batch_size=batch_size,
-                                                        num_workers=num_workers)
         metrics = {
-            "r2_score": lambda y_true, y_pred: r2_score(y_true=y_true, y_score=y_pred),
+            "r2_score": lambda y_true, y_pred: r2_score(y_true=y_true, y_pred=y_pred),
             "root_mean_squared_error": lambda y_true, y_pred: mean_squared_error(y_true=y_true,
                                                                                   y_pred=y_pred,
                                                                                   squared=False),
             "mean_absolute_error": lambda y_true, y_pred: mean_absolute_error(y_true=y_true,
                                                                               y_pred=y_pred)
         }
-        model.test_classifier(loaders=[train_loader, val_loader,
-                                    internal_test_loader, external_test_loader],
-                                splits=["train", "validation", "internal_test", "external_test"],
-                                epoch=(nb_epochs-1), metrics=metrics, chkpt_dir=chkpt_dir,
+        model.test_classifier(loaders=[train_loader, test_loader],
+                                splits=["train", "test"],
+                                epoch=(nb_epochs-1), metrics=metrics, chkpt_dir=chkpt_dir_dt,
                                 logs={"dataset": "ausz", "label": "nss", "fold": fold})
 
 def parse_args(argv):
@@ -228,7 +222,7 @@ def parse_args(argv):
     parser.add_argument("-t", "--train", action="store_true", help="Train the model")
     parser.add_argument("-f", "--fine_tune", action="store_true", help="Finetune the model")
     parser.add_argument("-p", "--nss_predictions", action="store_true")
-    parser.add_argument("-v", "--verbose", action="store_true", hekp="Verbosity")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbosity")
     args, unknownargs = parser.parse_known_args(argv)
     params = {}
     for i in range(0, len(unknownargs), 2):
