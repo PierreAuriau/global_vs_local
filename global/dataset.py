@@ -268,7 +268,7 @@ class NSSDataset(Dataset):
         else:
             self.images = np.load(os.path.join(config.path_to_data, "ausz_t1mri_skeleton_data32.npy"), mmap_mode="r")
         self.metadata = pd.read_csv(os.path.join(config.path_to_data, "ausz_t1mri_participants.csv"), dtype=self.id_types)
-        self.scheme = pd.read_csv(os.path.join(config.path_to_schemes, "nss_diagnosis_stratified_10-fold.csv"), dtype=self.id_types)
+        self.scheme = pd.read_csv(os.path.join(config.path_to_schemes, "nss_stratified_10_fold_ausz.csv"), dtype=self.id_types)
         
         # Select data
         assert (self.scheme["participant_id"] == self.metadata["participant_id"]).all(), "The scheme and the metadata do not have the same subject order"

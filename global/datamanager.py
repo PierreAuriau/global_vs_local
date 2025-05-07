@@ -12,18 +12,19 @@ from torchvision.transforms import transforms
 from torch.utils.data import DataLoader
 
 # project imports
-from dataset import UKBDataset, ClinicalDataset
+from dataset import UKBDataset, ClinicalDataset, NSSDataset
 from data_augmentation import Cutout, Shift, Blur, ToTensor
 
 
 class DataManager(object):
 
-    def __init__(self, dataset: str, label: str = None, two_views: bool = False,  
-                 data_augmentation: str = None):
+    def __init__(self, dataset: str, label: str = None, fold: int = None,
+                 two_views: bool = False, data_augmentation: str = None):
         
         self.logger = logging.getLogger("datamanager")
         self.two_views = two_views
         self.label = label
+        self.fold = fold
 
         if data_augmentation == "cutout":
             tr = transforms.Compose([Cutout(patch_size=0.4, random_size=True,
@@ -64,22 +65,26 @@ class DataManager(object):
         self.dataset = dict()
         if dataset == "ukb":
             self.dataset["train"] = UKBDataset(split='train', label=label, 
-                                            transforms=tr, two_views=two_views)
+                                               transforms=tr, two_views=two_views)
             self.dataset["validation"] = UKBDataset(split='validation', label=label, 
                                                     transforms=tr, two_views=two_views)
         elif dataset in ("asd", "bd", "scz"):
-            self.dataset["train"] = ClinicalDataset(split="train", label=label,
+            self.dataset["train"] = ClinicalDataset(split="train", label=label, fold=fold,
                                                     dataset=dataset, transforms=tr,
                                                     target_mapping=target_mapping)
-            self.dataset["validation"] = ClinicalDataset(split="validation", label=label,
-                                                         dataset=dataset, transforms=tr,
-                                                         target_mapping=target_mapping)
-            self.dataset["test_intra"] = ClinicalDataset(split="test_intra", label=label,
-                                                         dataset=dataset, transforms=tr,
-                                                         target_mapping=target_mapping)
-            self.dataset["test"] = ClinicalDataset(split="test", label=label,
-                                                        dataset=dataset, transforms=tr,
+            for split in ("validation", "internal_test", "external_test"):
+                self.dataset[split] = ClinicalDataset(split=split, label=label, fold=fold,
+                                                        dataset=dataset, transforms=ToTensor(),
                                                         target_mapping=target_mapping)
+        elif dataset == "ausz":
+            self.dataset["train"] = NSSDataset(split="train", label=label, fold=fold,
+                                               transforms=tr, target_mapping=target_mapping)
+            
+            self.dataset["test"] = NSSDataset(split="test", label=label, fold=fold,
+                                             transforms=ToTensor(), 
+                                             target_mapping=target_mapping)
+
+
 
     def get_dataloader(self, split, batch_size, **kwargs):
         dataset = self.dataset[split]
@@ -96,9 +101,9 @@ class DataManager(object):
     
 if __name__ == "__main__":
     datamanager = DataManager(dataset="ukb", label=None, two_views=False, 
-                              batch_size=32, data_augmentation=None)
-    train_loader = datamanager.get_dataloader(split="train")
-    val_loader = datamanager.get_dataloader(split="validation")
+                              data_augmentation=None)
+    train_loader = datamanager.get_dataloader(split="train", batch_size=32)
+    val_loader = datamanager.get_dataloader(split="validation", batch_size=32)
     for sample in val_loader:
         break
     assert len(train_loader) == 592
@@ -111,7 +116,7 @@ if __name__ == "__main__":
     """
 
     datamanager = DataManager(dataset="scz", label="diagnosis", 
-                              two_views=False, batch_size=32, data_augmentation=None)
-    for split in ("train", "validation", "test_intra", "test"):
-        loader = datamanager.get_dataloader(split=split)
+                              two_views=False, data_augmentation=None)
+    for split in ("train", "validation", "internal_test", "external_test"):
+        loader = datamanager.get_dataloader(split=split, batch_size=32)
         print(len(loader))
