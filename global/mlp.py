@@ -6,14 +6,21 @@ import torch.nn as nn
 
 
 class Classifier(nn.Module):
-    def __init__(self, latent_dim, activation="sigmoid"):
+    def __init__(self, latent_dim, activation="sigmoid", hidden_layer="full"):
         super(Classifier, self).__init__()
         self.latent_dim = latent_dim
-        self.fc = nn.Sequential(nn.Linear(self.latent_dim, self.latent_dim),
-                                nn.ReLU(),
-                                nn.Linear(self.latent_dim, self.latent_dim),
-                                nn.ReLU(),
-                                nn.Linear(self.latent_dim, 1))
+        if hidden_layer == "half":
+            self.fc = nn.Sequential(nn.Linear(self.latent_dim, self.latent_dim),
+                        nn.ReLU(),
+                        nn.Linear(self.latent_dim, self.latent_dim//2),
+                        nn.ReLU(),
+                        nn.Linear(self.latent_dim//2, 1))
+        else:
+            self.fc = nn.Sequential(nn.Linear(self.latent_dim, self.latent_dim),
+                                    nn.ReLU(),
+                                    nn.Linear(self.latent_dim, self.latent_dim),
+                                    nn.ReLU(),
+                                    nn.Linear(self.latent_dim, 1))
         if activation == "sigmoid":
             self.activation = nn.Sigmoid()
         elif activation == "softmax":
