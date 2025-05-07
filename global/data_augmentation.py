@@ -3,6 +3,7 @@
 
 
 # Import
+import os
 import logging
 import numpy as np
 from scipy.ndimage import rotate, gaussian_filter, shift
@@ -10,7 +11,10 @@ import torch
 import torch.nn as nn
 import numbers
 
+from config import Config
+
 logger = logging.getLogger()
+config = Config()
 
 class ToTensor(nn.Module):
     def forward(self, arr):
@@ -248,10 +252,19 @@ class Shift(object):
         transformed = shift(arr, translation, order=0, mode='constant', cval=0.0, prefilter=False)
         return transformed
 
+
+class Occlusion(object):
+
+    def __init__(self, area, background=0):
+        self.mask = np.load(os.path.join(config.path_to_masks, f"{area}.npy"))
+        self.background = background
+
+    def __call__(self, arr):
+        arr[self.mask] = self.background
+        return arr
+
+
 if __name__ == "__main__":
-    from config import Config
-    config = Config()
-    import os
     arr = np.load(os.path.join(config.path2data, "skeleton_sub-1000606.npy"))
     print(arr.shape)
     cutout = Cutout(patch_size=0.4, random_size=True, localization="on_data", min_size=0.1)
